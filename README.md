@@ -1,4 +1,4 @@
-# Game - O Jogo
+# Game - O Jogo - Totalmente Vibe Codado
 
 ## Visão geral
 
