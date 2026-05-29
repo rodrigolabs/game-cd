@@ -4,12 +4,35 @@
 const TILE = 48;
 const PLAYER_SPEED = 3;
 const MAX_ENERGY = 5;
-const ORDER_INTERVAL_MIN = 15000; // ms
-const ORDER_INTERVAL_MAX = 30000;
-const ORDER_TIME_MIN = 40000;
-const ORDER_TIME_MAX = 70000;
-const MAX_SIMULTANEOUS_ORDERS = 3;
 const POINTS_PER_ORDER = 100;
+const POINTS_PER_HIGH_VALUE_ORDER = 300;
+
+// High-value items — only found inside the vault
+const HIGH_VALUE_ITEMS = [
+    { name: 'Diamante',        shape: 'diamond', color: '#00e5ff', highValue: true },
+    { name: 'Estrela Dourada', shape: 'star',    color: '#ffd700', highValue: true },
+    { name: 'Cristal Rosa',    shape: 'diamond', color: '#ff80ab', highValue: true },
+];
+
+// Difficulty levels — indexed by wave (0-based)
+// Each wave triggers every WAVE_DURATION ms
+const WAVE_DURATION = 60000; // 60s por wave
+const DIFFICULTY = [
+    // wave 0 — intro
+    { maxItems: 1, itemPool: 2, intervalMin: 20000, intervalMax: 30000, timeMin: 55000, timeMax: 70000, maxOrders: 1 },
+    // wave 1
+    { maxItems: 1, itemPool: 3, intervalMin: 18000, intervalMax: 26000, timeMin: 50000, timeMax: 65000, maxOrders: 2 },
+    // wave 2
+    { maxItems: 2, itemPool: 3, intervalMin: 15000, intervalMax: 22000, timeMin: 45000, timeMax: 60000, maxOrders: 2 },
+    // wave 3
+    { maxItems: 2, itemPool: 4, intervalMin: 13000, intervalMax: 20000, timeMin: 40000, timeMax: 55000, maxOrders: 2 },
+    // wave 4
+    { maxItems: 3, itemPool: 4, intervalMin: 12000, intervalMax: 18000, timeMin: 35000, timeMax: 50000, maxOrders: 3 },
+    // wave 5
+    { maxItems: 3, itemPool: 5, intervalMin: 10000, intervalMax: 15000, timeMin: 30000, timeMax: 45000, maxOrders: 3 },
+    // wave 6+ — máxima dificuldade
+    { maxItems: 4, itemPool: 6, intervalMin:  8000, intervalMax: 13000, timeMin: 25000, timeMax: 40000, maxOrders: 3 },
+];
 
 // Item types
 const ITEM_TYPES = [
@@ -29,6 +52,7 @@ const ITEM_TYPES = [
 //   2 = item spawn (shelf front — walkable, has item)
 //   3 = checkout counter (caixa)
 //   4 = dock (doca)
+//   5 = vault wall (blocked, gold)
 // ====================================================
 const MAP_COLS = 25;
 const MAP_ROWS = 20;
@@ -72,6 +96,13 @@ function buildMap() {
     // Dock row (rightmost open area)
     for (let r = 2; r <= 10; r++) m[r][MAP_COLS-3] = 4;
 
+    // Vault (high-value locked area) — bottom-right corner
+    // Left wall at col 19, top wall at row 13 (door gap at col 21)
+    for (let r = 13; r <= MAP_ROWS - 2; r++) m[r][19] = 5;
+    for (let c = 19; c <= MAP_COLS - 2; c++) {
+        if (c !== 21) m[13][c] = 5;
+    }
+
     return m;
 }
 
@@ -86,6 +117,17 @@ for (let r = 0; r < MAP_ROWS; r++) {
         }
     }
 }
+
+// ====================================================
+// VAULT CONSTANTS
+// ====================================================
+const DOOR = { row: 13, col: 21, open: false };
+const KEY_SPOT = { row: 17, col: 11 }; // just right of the caixa counter
+const VAULT_ITEM_SPOTS = [
+    { row: 15, col: 20, itemType: HIGH_VALUE_ITEMS[0] },
+    { row: 15, col: 22, itemType: HIGH_VALUE_ITEMS[1] },
+    { row: 17, col: 21, itemType: HIGH_VALUE_ITEMS[2] },
+];
 
 // ====================================================
 // CANVAS SETUP
@@ -117,6 +159,11 @@ let orders = [];    // active orders
 let nextOrderTimer = 0;
 let orderIdCounter = 0;
 let lastTime = 0;
+let particles = []; // visual feedback particles
+let elapsedTime = 0;
+let wave = 0;
+let hasKey = false;
+let keyPickedUp = false;
 
 const player = {
     x: TILE * 12,
@@ -136,25 +183,39 @@ window.addEventListener('keyup',   e => { keys[e.key.toLowerCase()] = false; });
 // ====================================================
 function randomInt(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
 
+function getDifficulty() {
+    return DIFFICULTY[Math.min(wave, DIFFICULTY.length - 1)];
+}
+
 function generateOrder() {
-    if (orders.length >= MAX_SIMULTANEOUS_ORDERS) return;
-    const count = randomInt(1, 3);
+    const diff = getDifficulty();
+    if (orders.length >= diff.maxOrders) return;
+    const count = randomInt(1, diff.maxItems);
+    const regularPool = ITEM_TYPES.slice(0, diff.itemPool);
     const items = [];
+    const includeHighValue = wave >= 3 && Math.random() < 0.4;
     for (let i = 0; i < count; i++) {
-        items.push(ITEM_TYPES[randomInt(0, ITEM_TYPES.length - 1)]);
+        if (includeHighValue && i === count - 1) {
+            items.push(HIGH_VALUE_ITEMS[randomInt(0, HIGH_VALUE_ITEMS.length - 1)]);
+        } else {
+            items.push(regularPool[randomInt(0, regularPool.length - 1)]);
+        }
     }
+    const isHighValue = items.some(it => it.highValue);
     orders.push({
         id: ++orderIdCounter,
-        items, // array of item types needed
-        collected: [], // item names collected
-        timeLeft: randomInt(ORDER_TIME_MIN, ORDER_TIME_MAX),
+        items,
+        collected: [],
+        timeLeft: randomInt(diff.timeMin, diff.timeMax),
         done: false,
+        highValue: isHighValue,
     });
     scheduleNextOrder();
 }
 
 function scheduleNextOrder() {
-    nextOrderTimer = randomInt(ORDER_INTERVAL_MIN, ORDER_INTERVAL_MAX);
+    const diff = getDifficulty();
+    nextOrderTimer = randomInt(diff.intervalMin, diff.intervalMax);
 }
 
 // ====================================================
@@ -188,7 +249,11 @@ function collidesWithBlocked(nx, ny) {
     ];
     return corners.some(([cx, cy]) => {
         const t = tileAt(cx, cy);
-        return t === 1; // only walls block
+        if (t === 1 || t === 5) return true;
+        const dc = Math.floor(cx / TILE);
+        const dr = Math.floor(cy / TILE);
+        if (!DOOR.open && dc === DOOR.col && dr === DOOR.row) return true;
+        return false;
     });
 }
 
@@ -223,6 +288,33 @@ function playerNearItemSpot() {
     return null;
 }
 
+function playerNearVaultItemSpot() {
+    const cx = player.x + player.w / 2;
+    const cy = player.y + player.h / 2;
+    const reach = TILE * 1.2;
+    for (const spot of VAULT_ITEM_SPOTS) {
+        const tx = spot.col * TILE + TILE / 2;
+        const ty = spot.row * TILE + TILE / 2;
+        if (Math.abs(tx - cx) < reach && Math.abs(ty - cy) < reach) return spot;
+    }
+    return null;
+}
+
+function playerNearDoor() {
+    const cx = player.x + player.w / 2;
+    const cy = player.y + player.h / 2;
+    return Math.abs(DOOR.col * TILE + TILE / 2 - cx) < TILE * 1.4
+        && Math.abs(DOOR.row * TILE + TILE / 2 - cy) < TILE * 1.4;
+}
+
+function playerNearKeySpot() {
+    const cx = player.x + player.w / 2;
+    const cy = player.y + player.h / 2;
+    return !keyPickedUp
+        && Math.abs(KEY_SPOT.col * TILE + TILE / 2 - cx) < TILE * 1.2
+        && Math.abs(KEY_SPOT.row * TILE + TILE / 2 - cy) < TILE * 1.2;
+}
+
 // ====================================================
 // INTERACTION (E key)
 // ====================================================
@@ -233,43 +325,134 @@ window.addEventListener('keydown', e => {
 });
 
 function handleInteract() {
-    // 1. Pick up item from shelf
-    const spot = playerNearItemSpot();
-    if (spot && !hasBox) {
-        const item = spot.itemType;
-        inventory.push(item);
-        showMessage(`Pegou: ${item.name}`);
+    const pcx = player.x + player.w / 2;
+
+    // KEY PICKUP
+    if (playerNearKeySpot()) {
+        hasKey = true;
+        keyPickedUp = true;
+        showMessage('🔑 Chave do cofre pega! Vá até a porta e pressione E.');
+        addParticle(pcx, player.y - 10, '🔑 Chave!', '#ffd700');
         updateUI();
         return;
     }
 
-    // 2. Box items if near checkout and have inventory
-    const caixaTile = playerNearTileType(3);
-    if (caixaTile) {
-        if (!hasBox && inventory.length > 0) {
-            box = [...inventory];
-            inventory = [];
-            hasBox = true;
-            checkedOut = false;
-            showMessage('Itens colocados na caixa!');
-            updateUI();
-        } else if (hasBox && !checkedOut) {
-            // Emit nota fiscal = check out
-            const matched = tryCheckout();
-            if (matched) {
-                checkedOut = true;
-                showMessage('Nota fiscal emitida! Leve para a doca.');
+    // VAULT DOOR
+    if (playerNearDoor()) {
+        if (!DOOR.open) {
+            if (hasKey) {
+                DOOR.open = true;
+                showMessage('Porta aberta! Pegue o item e saia — ela fecha ao sair.');
+                addTileFlash(DOOR.col, DOOR.row, '#ffd700');
+                addParticle(pcx, player.y - 10, '🔓 Aberta!', '#ffd700');
             } else {
-                showMessage('Nenhum pedido corresponde a esta caixa!');
+                showMessage('🔒 Porta trancada! Pegue a chave no caixa.');
+                addParticle(pcx, player.y - 10, '🔒 Trancado', '#e74c3c');
             }
         }
         return;
     }
 
-    // 3. Deliver to dock
+    // VAULT ITEM PICKUP
+    const vaultSpot = playerNearVaultItemSpot();
+    if (vaultSpot) {
+        if (!DOOR.open) {
+            showMessage('Abra a porta primeiro!');
+            return;
+        }
+        if (!hasBox) {
+            inventory.push(vaultSpot.itemType);
+            showMessage(`💎 Pegou: ${vaultSpot.itemType.name} — item de alto valor!`);
+            addParticle(pcx, player.y - 10, `💎 ${vaultSpot.itemType.name}`, vaultSpot.itemType.color);
+            addTileFlash(vaultSpot.col, vaultSpot.row, vaultSpot.itemType.color);
+            updateUI();
+        }
+        return;
+    }
+
+    // REGULAR ITEM PICKUP
+    const spot = playerNearItemSpot();
+    if (spot && !hasBox) {
+        const item = spot.itemType;
+        inventory.push(item);
+        showMessage(`Pegou: ${item.name}`);
+        addParticle(pcx, player.y - 10, `+${item.name}`, item.color);
+        addTileFlash(spot.col, spot.row, item.color);
+        updateUI();
+        return;
+    }
+
+    // CAIXA (checkout)
+    const caixaTile = playerNearTileType(3);
+    if (caixaTile) {
+        // Return key if player has it
+        if (hasKey) {
+            hasKey = false;
+            keyPickedUp = false;
+            showMessage('🔑 Chave devolvida ao caixa.');
+            addParticle(pcx, player.y - 10, '🔑 Devolvida', '#ffd700');
+            updateUI();
+        }
+        if (hasBox && checkedOut) {
+            showMessage('Leve a caixa para a DOCA!');
+            addParticle(pcx, player.y - 10, '→ DOCA', '#7ec8e3');
+            return;
+        }
+        if (hasBox && !checkedOut) {
+            const matched = tryCheckout();
+            if (matched) {
+                checkedOut = true;
+                showMessage('Nota fiscal emitida! Leve para a doca.');
+                addParticle(pcx, player.y - 10, '📦 NF emitida!', '#ffe066');
+                addTileFlash(caixaTile.col, caixaTile.row, '#ffe066');
+            } else {
+                showMessage('Itens não correspondem a nenhum pedido!');
+                addParticle(pcx, player.y - 10, '❌ Sem pedido', '#e74c3c');
+            }
+            updateUI();
+            return;
+        }
+        if (!hasBox && inventory.length > 0) {
+            box = [...inventory];
+            inventory = [];
+            hasBox = true;
+            checkedOut = false;
+            const matched = tryCheckout();
+            if (matched) {
+                checkedOut = true;
+                showMessage('Nota fiscal emitida! Leve para a doca.');
+                addParticle(pcx, player.y - 10, '📦 NF emitida!', '#ffe066');
+                addTileFlash(caixaTile.col, caixaTile.row, '#ffe066');
+            } else {
+                inventory = [...box];
+                box = [];
+                hasBox = false;
+                showMessage('Itens não correspondem a nenhum pedido aberto!');
+                addParticle(pcx, player.y - 10, '❌ Sem pedido', '#e74c3c');
+            }
+            updateUI();
+        } else if (inventory.length === 0 && !hasBox && !hasKey) {
+            showMessage('Pegue os itens do pedido primeiro!');
+        }
+        return;
+    }
+
+    // DOCK delivery
     const docaTile = playerNearTileType(4);
-    if (docaTile && hasBox && checkedOut) {
-        deliverBox();
+    if (docaTile) {
+        if (hasBox && checkedOut) {
+            if (hasKey) {
+                showMessage('🔑 Devolva a chave ao caixa antes de entregar!');
+                addParticle(pcx, player.y - 10, '🔑 → CAIXA', '#e74c3c');
+                return;
+            }
+            deliverBox();
+        } else if (hasBox && !checkedOut) {
+            showMessage('Leve a caixa ao CAIXA primeiro!');
+            addParticle(pcx, player.y - 10, '→ CAIXA', '#f39c12');
+        } else {
+            showMessage('Você não tem caixa faturada para entregar.');
+        }
         return;
     }
 }
@@ -295,10 +478,14 @@ function tryCheckout() {
 }
 
 function deliverBox() {
-    // Complete the matched order
+    const pcx = player.x + player.w / 2;
+    let points = POINTS_PER_ORDER;
+    let isHV = false;
     for (let i = orders.length - 1; i >= 0; i--) {
         if (orders[i].matched) {
-            score += POINTS_PER_ORDER;
+            isHV = !!orders[i].highValue;
+            points = isHV ? POINTS_PER_HIGH_VALUE_ORDER : POINTS_PER_ORDER;
+            score += points;
             orders.splice(i, 1);
             break;
         }
@@ -306,8 +493,25 @@ function deliverBox() {
     box = [];
     hasBox = false;
     checkedOut = false;
-    showMessage(`+${POINTS_PER_ORDER} pontos! Pedido entregue!`);
+    const ptColor = isHV ? '#ffd700' : '#a8e6a3';
+    showMessage(`+${points} pontos! Pedido${isHV ? ' de ALTO VALOR' : ''} entregue!`);
+    addParticle(pcx, player.y - 10, `+${points} pts!`, ptColor);
+    addParticle(pcx, player.y - 32, isHV ? '💎 Entregue!' : '✓ Entregue!', isHV ? '#ffd700' : '#27ae60');
+    const dock = playerNearTileType(4);
+    if (dock) addTileFlash(dock.col, dock.row, isHV ? '#ffd700' : '#27ae60');
     updateUI();
+}
+
+// ====================================================
+// PARTICLES
+// ====================================================
+function addParticle(x, y, text, color) {
+    particles.push({ x, y, text, color, life: 1.0, vy: -0.7 });
+}
+
+let tileFlashes = []; // { col, row, color, life }
+function addTileFlash(col, row, color) {
+    tileFlashes.push({ col, row, color, life: 1.0 });
 }
 
 // ====================================================
@@ -330,17 +534,18 @@ function updateUI() {
     document.getElementById('energy-display').textContent = hearts;
 
     // Score
-    document.getElementById('score-display').textContent = `Pontos: ${score}`;
+    document.getElementById('score-display').textContent = `Pontos: ${score}  |  Wave ${wave + 1}`;
 
     // Orders
     const ordersList = document.getElementById('orders-list');
     ordersList.innerHTML = '';
     orders.forEach(ord => {
         const div = document.createElement('div');
-        div.className = 'order-entry' + (ord.timeLeft < 10000 ? ' urgent' : '');
+        div.className = 'order-entry' + (ord.timeLeft < 10000 ? ' urgent' : '') + (ord.highValue ? ' high-value' : '');
         const secs = Math.ceil(ord.timeLeft / 1000);
         const timerClass = secs < 10 ? 'order-timer low' : 'order-timer';
-        div.innerHTML = `<strong>#${ord.id}</strong> ${ord.items.map(i => i.name).join(', ')}<br><span class="${timerClass}">${secs}s</span>`;
+        const hvMark = ord.highValue ? ' 💎' : '';
+        div.innerHTML = `<strong>#${ord.id}${hvMark}</strong> ${ord.items.map(i => i.name).join(', ')}<br><span class="${timerClass}">${secs}s</span>`;
         ordersList.appendChild(div);
     });
 
@@ -352,13 +557,20 @@ function updateUI() {
     displayItems.forEach(item => {
         const d = document.createElement('div');
         d.className = 'inv-item';
-        d.textContent = label + item.name;
+        d.textContent = label + (item.highValue ? '💎 ' : '') + item.name;
         invList.appendChild(d);
     });
     if (displayItems.length === 0) {
         const d = document.createElement('div');
         d.className = 'inv-item';
         d.textContent = '(vazio)';
+        invList.appendChild(d);
+    }
+    if (hasKey) {
+        const d = document.createElement('div');
+        d.className = 'inv-item';
+        d.style.color = '#ffd700';
+        d.textContent = '🔑 Chave do cofre';
         invList.appendChild(d);
     }
 }
@@ -385,6 +597,26 @@ function drawShape(cx, cy, size, shape, color, alpha = 1) {
         ctx.moveTo(cx, cy - size/2);
         ctx.lineTo(cx + size/2, cy + size/2);
         ctx.lineTo(cx - size/2, cy + size/2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    } else if (shape === 'diamond') {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - size/2);
+        ctx.lineTo(cx + size/2, cy);
+        ctx.lineTo(cx, cy + size/2);
+        ctx.lineTo(cx - size/2, cy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    } else if (shape === 'star') {
+        ctx.beginPath();
+        for (let i = 0; i < 10; i++) {
+            const angle = (i * Math.PI) / 5 - Math.PI / 2;
+            const r = i % 2 === 0 ? size / 2 : size / 4;
+            if (i === 0) ctx.moveTo(cx + r * Math.cos(angle), cy + r * Math.sin(angle));
+            else ctx.lineTo(cx + r * Math.cos(angle), cy + r * Math.sin(angle));
+        }
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
@@ -428,6 +660,15 @@ function draw() {
                 ctx.fillRect(tx, ty, TILE, TILE);
                 ctx.fillStyle = '#388e3c';
                 ctx.fillRect(tx+3, ty+3, TILE-6, TILE-6);
+            } else if (t === 5) {
+                // vault wall
+                ctx.fillStyle = '#3a2800';
+                ctx.fillRect(tx, ty, TILE, TILE);
+                ctx.fillStyle = '#7a5200';
+                ctx.fillRect(tx+2, ty+2, TILE-4, TILE-4);
+                ctx.strokeStyle = '#ffd700';
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(tx+1, ty+1, TILE-2, TILE-2);
             } else {
                 // floor
                 ctx.fillStyle = '#1a1a2e';
@@ -444,6 +685,65 @@ function draw() {
         const ty = spot.row * TILE + TILE / 2;
         drawShape(tx, ty, 20, spot.itemType.shape, spot.itemType.color);
     });
+
+    // Draw door tile
+    {
+        const dtx = DOOR.col * TILE;
+        const dty = DOOR.row * TILE;
+        if (!DOOR.open) {
+            ctx.fillStyle = '#3a2800';
+            ctx.fillRect(dtx, dty, TILE, TILE);
+            ctx.fillStyle = '#7a3800';
+            ctx.fillRect(dtx+3, dty+3, TILE-6, TILE-6);
+            ctx.strokeStyle = '#ffd700';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(dtx+1, dty+1, TILE-2, TILE-2);
+            // lock shackle
+            ctx.beginPath();
+            ctx.arc(dtx + TILE/2, dty + TILE/2 - 4, 6, Math.PI, 0);
+            ctx.strokeStyle = '#ffd700';
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+            // lock body
+            ctx.fillStyle = '#ffd700';
+            ctx.fillRect(dtx + TILE/2 - 6, dty + TILE/2 - 4, 12, 10);
+        } else {
+            ctx.fillStyle = '#1a3a1a';
+            ctx.fillRect(dtx, dty, TILE, TILE);
+            ctx.strokeStyle = '#27ae60';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(dtx, dty, TILE, TILE);
+        }
+    }
+
+    // Draw vault item spots
+    VAULT_ITEM_SPOTS.forEach(spot => {
+        // vault floor background
+        ctx.fillStyle = '#0f0f05';
+        ctx.fillRect(spot.col * TILE, spot.row * TILE, TILE, TILE);
+        ctx.save();
+        ctx.shadowColor = spot.itemType.color;
+        ctx.shadowBlur = 16;
+        drawShape(spot.col * TILE + TILE/2, spot.row * TILE + TILE/2, 26, spot.itemType.shape, spot.itemType.color);
+        ctx.restore();
+    });
+
+    // Draw key at key spot if not picked up
+    if (!keyPickedUp) {
+        const kx = KEY_SPOT.col * TILE + TILE/2;
+        const ky = KEY_SPOT.row * TILE + TILE/2;
+        ctx.font = '24px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🔑', kx, ky);
+        ctx.textBaseline = 'alphabetic';
+    }
+
+    // Vault label
+    ctx.fillStyle = '#ffd700';
+    ctx.font = 'bold 10px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('COFRE', 21 * TILE + TILE/2, 13 * TILE - 6);
 
     // Labels
     ctx.fillStyle = '#ffe066';
@@ -464,6 +764,15 @@ function draw() {
         }
     }
 
+    // Draw tile flashes (world space, inside camera transform)
+    tileFlashes.forEach(f => {
+        ctx.save();
+        ctx.globalAlpha = f.life * 0.55;
+        ctx.fillStyle = f.color;
+        ctx.fillRect(f.col * TILE, f.row * TILE, TILE, TILE);
+        ctx.restore();
+    });
+
     // Draw player
     const px = player.x + player.w / 2;
     const py = player.y + player.h / 2;
@@ -481,8 +790,31 @@ function draw() {
         ctx.lineWidth = 1.5;
         ctx.strokeRect(player.x + 6, player.y - 6, 18, 14);
     }
+    if (hasKey) {
+        ctx.font = '14px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🔑', px - 14, py - 20);
+        ctx.textBaseline = 'alphabetic';
+    }
 
-    ctx.restore();
+    ctx.restore(); // end camera transform
+
+    // Draw particles in screen space
+    particles.forEach(p => {
+        ctx.save();
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+        ctx.lineWidth = 3;
+        ctx.font = 'bold 15px Courier New';
+        ctx.textAlign = 'center';
+        const sx = p.x - camera.x;
+        const sy = p.y - camera.y;
+        ctx.strokeText(p.text, sx, sy);
+        ctx.fillText(p.text, sx, sy);
+        ctx.restore();
+    });
 }
 
 // ====================================================
@@ -511,6 +843,23 @@ function update(dt) {
     camera.y = player.y + player.h / 2 - canvas.height / 2;
     camera.x = Math.max(0, Math.min(camera.x, MAP_COLS * TILE - canvas.width));
     camera.y = Math.max(0, Math.min(camera.y, MAP_ROWS * TILE - canvas.height));
+
+    // Auto-close vault door when player leaves vault zone
+    if (DOOR.open) {
+        const pr = Math.floor((player.y + player.h / 2) / TILE);
+        if (pr < DOOR.row) DOOR.open = false;
+    }
+
+    // Wave progression
+    elapsedTime += dt;
+    const newWave = Math.min(Math.floor(elapsedTime / WAVE_DURATION), DIFFICULTY.length - 1);
+    if (newWave > wave) {
+        wave = newWave;
+        const pcx = player.x + player.w / 2;
+        showMessage(`Wave ${wave + 1}! Pedidos mais complexos!`, 3500);
+        addParticle(pcx, player.y - 10, `⬆ Wave ${wave + 1}`, '#ffe066');
+        updateUI();
+    }
 
     // Order timers
     for (let i = orders.length - 1; i >= 0; i--) {
@@ -542,6 +891,19 @@ function update(dt) {
         if (msgTimer <= 0) msgBox.style.display = 'none';
     }
 
+    // Update particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].y += particles[i].vy;
+        particles[i].life -= 0.016;
+        if (particles[i].life <= 0) particles.splice(i, 1);
+    }
+
+    // Update tile flashes
+    for (let i = tileFlashes.length - 1; i >= 0; i--) {
+        tileFlashes[i].life -= 0.03;
+        if (tileFlashes[i].life <= 0) tileFlashes.splice(i, 1);
+    }
+
     updateUI();
 }
 
@@ -567,8 +929,15 @@ function startGame() {
     box = [];
     hasBox = false;
     checkedOut = false;
+    hasKey = false;
+    keyPickedUp = false;
+    DOOR.open = false;
     orders = [];
+    particles = [];
+    tileFlashes = [];
     orderIdCounter = 0;
+    elapsedTime = 0;
+    wave = 0;
     player.x = TILE * 12;
     player.y = TILE * 15;
     document.getElementById('start-screen').style.display = 'none';
@@ -576,7 +945,7 @@ function startGame() {
     generateOrder();
     scheduleNextOrder();
     updateUI();
-    showMessage('Separe os pedidos! Pressione E para interagir.', 4000);
+    showMessage('WASD=mover  E=interagir (prateleira/caixa/doca)', 5000);
 }
 
 function startGameOver() {
