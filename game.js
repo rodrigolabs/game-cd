@@ -998,8 +998,12 @@ function update(dt) {
 
     // Alarm: door left open while player walks too far away
     if (DOOR.open) {
-        const pr = Math.floor((player.y + player.h / 2) / TILE);
-        if (pr < DOOR.row - 3) {
+        const doorCx = DOOR.col * TILE + TILE / 2;
+        const doorCy = DOOR.row * TILE + TILE / 2;
+        const pcx = player.x + player.w / 2;
+        const pcy = player.y + player.h / 2;
+        const dist = Math.sqrt((pcx - doorCx) ** 2 + (pcy - doorCy) ** 2);
+        if (dist > TILE * 4) {
             alarmActive = true;
             alarmTimer += dt;
         } else {
