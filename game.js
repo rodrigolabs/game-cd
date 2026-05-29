@@ -57,6 +57,18 @@ const ITEM_TYPES = [
 const MAP_COLS = 25;
 const MAP_ROWS = 20;
 
+// Numbered checkout counters and docks
+const CAIXAS = [
+    { id: 1, row: MAP_ROWS - 3, col: 4 },
+    { id: 2, row: MAP_ROWS - 3, col: 6 },
+    { id: 3, row: MAP_ROWS - 3, col: 8 },
+];
+const DOCAS = [
+    { id: 1, row: 3, col: MAP_COLS - 3 },
+    { id: 2, row: 6, col: MAP_COLS - 3 },
+    { id: 3, row: 9, col: MAP_COLS - 3 },
+];
+
 function buildMap() {
     // Fill with floor
     const m = Array.from({ length: MAP_ROWS }, () => new Array(MAP_COLS).fill(0));
@@ -90,11 +102,11 @@ function buildMap() {
         }
     });
 
-    // Checkout counter row (near bottom-right)
-    for (let c = 3; c <= 10; c++) m[MAP_ROWS-3][c] = 3;
+    // Checkout counters (caixas) — numbered
+    CAIXAS.forEach(cx => { m[cx.row][cx.col] = 3; });
 
-    // Dock row (rightmost open area)
-    for (let r = 2; r <= 10; r++) m[r][MAP_COLS-3] = 4;
+    // Docks — numbered
+    DOCAS.forEach(d => { m[d.row][d.col] = 4; });
 
     // Vault (high-value locked area) — bottom-right corner
     // Left wall at col 19, top wall at row 13 (door gap at col 21)
@@ -123,6 +135,7 @@ for (let r = 0; r < MAP_ROWS; r++) {
 // ====================================================
 const DOOR = { row: 13, col: 21, open: false };
 const KEY_SPOT = { row: 17, col: 11 }; // just right of the caixa counter
+const TRASH_SPOT = { row: 17, col: 2 }; // lixeira perto do caixa
 const VAULT_ITEM_SPOTS = [
     { row: 15, col: 20, itemType: HIGH_VALUE_ITEMS[0] },
     { row: 15, col: 22, itemType: HIGH_VALUE_ITEMS[1] },
@@ -204,6 +217,8 @@ function generateOrder() {
         }
     }
     const isHighValue = items.some(it => it.highValue);
+    const caixaId = CAIXAS[randomInt(0, CAIXAS.length - 1)].id;
+    const docaId = DOCAS[randomInt(0, DOCAS.length - 1)].id;
     orders.push({
         id: ++orderIdCounter,
         items,
@@ -211,6 +226,8 @@ function generateOrder() {
         timeLeft: randomInt(diff.timeMin, diff.timeMax),
         done: false,
         highValue: isHighValue,
+        caixaId,
+        docaId,
     });
     scheduleNextOrder();
 }
@@ -324,6 +341,33 @@ function playerAtKeyReturnSpot() {
         && Math.abs(KEY_SPOT.row * TILE + TILE / 2 - cy) < TILE * 1.2;
 }
 
+function playerNearTrash() {
+    const cx = player.x + player.w / 2;
+    const cy = player.y + player.h / 2;
+    return Math.abs(TRASH_SPOT.col * TILE + TILE / 2 - cx) < TILE * 1.2
+        && Math.abs(TRASH_SPOT.row * TILE + TILE / 2 - cy) < TILE * 1.2;
+}
+
+function playerNearCaixa() {
+    const cx = player.x + player.w / 2;
+    const cy = player.y + player.h / 2;
+    const reach = TILE * 1.2;
+    for (const c of CAIXAS) {
+        if (Math.abs(c.col * TILE + TILE / 2 - cx) < reach && Math.abs(c.row * TILE + TILE / 2 - cy) < reach) return c;
+    }
+    return null;
+}
+
+function playerNearDoca() {
+    const cx = player.x + player.w / 2;
+    const cy = player.y + player.h / 2;
+    const reach = TILE * 1.2;
+    for (const d of DOCAS) {
+        if (Math.abs(d.col * TILE + TILE / 2 - cx) < reach && Math.abs(d.row * TILE + TILE / 2 - cy) < reach) return d;
+    }
+    return null;
+}
+
 // ====================================================
 // INTERACTION (E key)
 // ====================================================
@@ -335,6 +379,22 @@ window.addEventListener('keydown', e => {
 
 function handleInteract() {
     const pcx = player.x + player.w / 2;
+
+    // TRASH — discard inventory / box
+    if (playerNearTrash()) {
+        if (inventory.length > 0 || hasBox) {
+            inventory = [];
+            box = [];
+            hasBox = false;
+            checkedOut = false;
+            showMessage('🗑️ Itens descartados na lixeira.');
+            addParticle(pcx, player.y - 10, '🗑️ Descartado', '#95a5a6');
+            updateUI();
+        } else {
+            showMessage('Nada para descartar.');
+        }
+        return;
+    }
 
     // KEY RETURN
     if (hasKey && playerAtKeyReturnSpot()) {
@@ -421,22 +481,24 @@ function handleInteract() {
     }
 
     // CAIXA (checkout)
-    const caixaTile = playerNearTileType(3);
-    if (caixaTile) {
+    const nearCaixa = playerNearCaixa();
+    if (nearCaixa) {
         if (hasBox && checkedOut) {
-            showMessage('Leve a caixa para a DOCA!');
-            addParticle(pcx, player.y - 10, '→ DOCA', '#7ec8e3');
+            const matchedOrd = orders.find(o => o.matched);
+            const docaMsg = matchedOrd ? ` ${matchedOrd.docaId}` : '';
+            showMessage(`Leve a caixa para a DOCA${docaMsg}!`);
+            addParticle(pcx, player.y - 10, `→ DOCA${docaMsg}`, '#7ec8e3');
             return;
         }
         if (hasBox && !checkedOut) {
-            const matched = tryCheckout();
+            const matched = tryCheckout(nearCaixa.id);
             if (matched) {
                 checkedOut = true;
-                showMessage('Nota fiscal emitida! Leve para a doca.');
+                showMessage(`Nota fiscal emitida! Leve para a DOCA ${matched.docaId}.`);
                 addParticle(pcx, player.y - 10, '📦 NF emitida!', '#ffe066');
-                addTileFlash(caixaTile.col, caixaTile.row, '#ffe066');
+                addTileFlash(nearCaixa.col, nearCaixa.row, '#ffe066');
             } else {
-                showMessage('Itens não correspondem a nenhum pedido!');
+                showMessage(`Itens não correspondem ao pedido do CAIXA ${nearCaixa.id}!`);
                 addParticle(pcx, player.y - 10, '❌ Sem pedido', '#e74c3c');
             }
             updateUI();
@@ -447,17 +509,17 @@ function handleInteract() {
             inventory = [];
             hasBox = true;
             checkedOut = false;
-            const matched = tryCheckout();
+            const matched = tryCheckout(nearCaixa.id);
             if (matched) {
                 checkedOut = true;
-                showMessage('Nota fiscal emitida! Leve para a doca.');
+                showMessage(`Nota fiscal emitida! Leve para a DOCA ${matched.docaId}.`);
                 addParticle(pcx, player.y - 10, '📦 NF emitida!', '#ffe066');
-                addTileFlash(caixaTile.col, caixaTile.row, '#ffe066');
+                addTileFlash(nearCaixa.col, nearCaixa.row, '#ffe066');
             } else {
                 inventory = [...box];
                 box = [];
                 hasBox = false;
-                showMessage('Itens não correspondem a nenhum pedido aberto!');
+                showMessage(`Itens não correspondem ao pedido do CAIXA ${nearCaixa.id}!`);
                 addParticle(pcx, player.y - 10, '❌ Sem pedido', '#e74c3c');
             }
             updateUI();
@@ -468,15 +530,21 @@ function handleInteract() {
     }
 
     // DOCK delivery
-    const docaTile = playerNearTileType(4);
-    if (docaTile) {
+    const nearDoca = playerNearDoca();
+    if (nearDoca) {
         if (hasBox && checkedOut) {
             if (hasKey) {
                 showMessage('🔑 Devolva a chave ao local indicado antes de entregar!');
                 addParticle(pcx, player.y - 10, '🔑 → LOCAL', '#e74c3c');
                 return;
             }
-            deliverBox();
+            const matchedOrd = orders.find(o => o.matched);
+            if (matchedOrd && matchedOrd.docaId !== nearDoca.id) {
+                showMessage(`⚠ Entregue na DOCA ${matchedOrd.docaId}!`);
+                addParticle(pcx, player.y - 10, `→ DOCA ${matchedOrd.docaId}`, '#e74c3c');
+                return;
+            }
+            deliverBox(nearDoca);
         } else if (hasBox && !checkedOut) {
             showMessage('Leve a caixa ao CAIXA primeiro!');
             addParticle(pcx, player.y - 10, '→ CAIXA', '#f39c12');
@@ -491,12 +559,13 @@ function boxItemNames() {
     return box.map(i => i.name).sort().join(',');
 }
 
-function tryCheckout() {
-    // Find an active order whose items match the box exactly
+function tryCheckout(caixaId) {
+    // Find an active order whose items match the box at the right caixa
     const boxSorted = box.map(i => i.name).sort().join(',');
     for (let i = 0; i < orders.length; i++) {
         const ord = orders[i];
         if (ord.done) continue;
+        if (ord.caixaId !== caixaId) continue;
         const ordSorted = ord.items.map(it => it.name).sort().join(',');
         if (ordSorted === boxSorted) {
             ord.matched = true;
@@ -575,7 +644,7 @@ function updateUI() {
         const secs = Math.ceil(ord.timeLeft / 1000);
         const timerClass = secs < 10 ? 'order-timer low' : 'order-timer';
         const hvMark = ord.highValue ? ' 💎' : '';
-        div.innerHTML = `<strong>#${ord.id}${hvMark}</strong> ${ord.items.map(i => i.name).join(', ')}<br><span class="${timerClass}">${secs}s</span>`;
+        div.innerHTML = `<strong>#${ord.id}${hvMark}</strong> ${ord.items.map(i => i.name).join(', ')}<br><span style="color:#7ec8e3;font-size:10px">C${ord.caixaId} → D${ord.docaId}</span> <span class="${timerClass}">${secs}s</span>`;
         ordersList.appendChild(div);
     });
 
@@ -784,30 +853,47 @@ function draw() {
         }
     }
 
+    // Draw trash spot
+    {
+        const tx = TRASH_SPOT.col * TILE;
+        const ty = TRASH_SPOT.row * TILE;
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(tx, ty, TILE, TILE);
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(tx + 2, ty + 2, TILE - 4, TILE - 4);
+        ctx.font = '22px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🗑️', tx + TILE / 2, ty + TILE / 2 - 4);
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = '#aaa';
+        ctx.font = 'bold 8px Courier New';
+        ctx.textAlign = 'center';
+        ctx.fillText('LIXEIRA', tx + TILE / 2, ty + TILE - 5);
+    }
+
     // Vault label
     ctx.fillStyle = '#ffd700';
     ctx.font = 'bold 10px Courier New';
     ctx.textAlign = 'center';
     ctx.fillText('COFRE', 21 * TILE + TILE/2, 13 * TILE - 6);
 
-    // Labels
-    ctx.fillStyle = '#ffe066';
-    ctx.font = 'bold 11px Courier New';
+    // Numbered caixa and doca labels
+    ctx.font = 'bold 9px Courier New';
     ctx.textAlign = 'center';
-    // Checkout label
-    for (let c = 3; c <= 10; c++) {
-        if (c === 6) ctx.fillText('CAIXA', c*TILE+TILE/2, (MAP_ROWS-3)*TILE + TILE/2 + 4);
-    }
-    // Dock label
-    for (let r = 2; r <= 10; r++) {
-        if (r === 6) {
-            ctx.save();
-            ctx.translate((MAP_COLS-3)*TILE+TILE/2, r*TILE+TILE/2);
-            ctx.rotate(-Math.PI/2);
-            ctx.fillText('DOCA', 0, 4);
-            ctx.restore();
-        }
-    }
+    CAIXAS.forEach(cx => {
+        ctx.fillStyle = '#ffe066';
+        ctx.fillText(`C${cx.id}`, cx.col * TILE + TILE / 2, cx.row * TILE + TILE / 2 + 4);
+    });
+    DOCAS.forEach(d => {
+        ctx.save();
+        ctx.fillStyle = '#ffe066';
+        ctx.translate(d.col * TILE + TILE / 2, d.row * TILE + TILE / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText(`D${d.id}`, 0, 4);
+        ctx.restore();
+    });
 
     // Draw tile flashes (world space, inside camera transform)
     tileFlashes.forEach(f => {
