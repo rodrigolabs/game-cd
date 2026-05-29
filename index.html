@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game - O Jogo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="ui-overlay">
+        <div id="hud">
+            <span id="energy-display">❤️❤️❤️❤️❤️</span>
+            <span id="score-display">Pontos: 0</span>
+        </div>
+        <div id="orders-panel">
+            <h3>Pedidos</h3>
+            <div id="orders-list"></div>
+        </div>
+        <div id="inventory-panel">
+            <h3>Caixa</h3>
+            <div id="inventory-list"></div>
+        </div>
+        <div id="message-box"></div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    <div id="start-screen">
+        <h1>Centro de Distribuição</h1>
+        <p>Separe os pedidos a tempo!</p>
+        <p>Mova com <strong>WASD</strong></p>
+        <button id="start-btn">Iniciar Jogo</button>
+    </div>
+    <div id="gameover-screen" style="display:none">
+        <h1>Game Over</h1>
+        <p id="final-score"></p>
+        <button id="restart-btn">Jogar Novamente</button>
+    </div>
+    <script src="game.js"></script>
+</body>
+</html>
