@@ -847,7 +847,7 @@ function update(dt) {
     // Auto-close vault door when player leaves vault zone
     if (DOOR.open) {
         const pr = Math.floor((player.y + player.h / 2) / TILE);
-        if (pr < DOOR.row) DOOR.open = false;
+        if (pr < DOOR.row - 1) DOOR.open = false;
     }
 
     // Wave progression
