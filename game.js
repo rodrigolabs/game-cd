@@ -164,6 +164,8 @@ let elapsedTime = 0;
 let wave = 0;
 let hasKey = false;
 let keyPickedUp = false;
+let alarmActive = false;
+let alarmTimer = 0;
 
 const player = {
     x: TILE * 12,
@@ -315,6 +317,13 @@ function playerNearKeySpot() {
         && Math.abs(KEY_SPOT.row * TILE + TILE / 2 - cy) < TILE * 1.2;
 }
 
+function playerAtKeyReturnSpot() {
+    const cx = player.x + player.w / 2;
+    const cy = player.y + player.h / 2;
+    return Math.abs(KEY_SPOT.col * TILE + TILE / 2 - cx) < TILE * 1.2
+        && Math.abs(KEY_SPOT.row * TILE + TILE / 2 - cy) < TILE * 1.2;
+}
+
 // ====================================================
 // INTERACTION (E key)
 // ====================================================
@@ -326,6 +335,16 @@ window.addEventListener('keydown', e => {
 
 function handleInteract() {
     const pcx = player.x + player.w / 2;
+
+    // KEY RETURN
+    if (hasKey && playerAtKeyReturnSpot()) {
+        hasKey = false;
+        keyPickedUp = false;
+        showMessage('🔑 Chave devolvida ao local!');
+        addParticle(pcx, player.y - 10, '🔑 Devolvida', '#ffd700');
+        updateUI();
+        return;
+    }
 
     // KEY PICKUP
     if (playerNearKeySpot()) {
@@ -342,13 +361,32 @@ function handleInteract() {
         if (!DOOR.open) {
             if (hasKey) {
                 DOOR.open = true;
-                showMessage('Porta aberta! Pegue o item e saia — ela fecha ao sair.');
+                showMessage('Porta aberta! Pressione E na porta para fechar.');
                 addTileFlash(DOOR.col, DOOR.row, '#ffd700');
                 addParticle(pcx, player.y - 10, '🔓 Aberta!', '#ffd700');
             } else {
-                showMessage('🔒 Porta trancada! Pegue a chave no caixa.');
+                showMessage('🔒 Porta trancada! Pegue a chave no local indicado.');
                 addParticle(pcx, player.y - 10, '🔒 Trancado', '#e74c3c');
             }
+        } else {
+            // Push player clear of the door tile before closing to avoid getting stuck
+            const doorLeft   = DOOR.col * TILE;
+            const doorRight  = (DOOR.col + 1) * TILE;
+            const doorTop    = DOOR.row * TILE;
+            const playerRight = player.x + player.w - 2;
+            const playerBottom = player.y + player.h - 2;
+            const overlapH = playerRight > doorLeft + 2 && player.x + 2 < doorRight;
+            const overlapV = playerBottom > doorTop + 2 && player.y + 2 < (DOOR.row + 1) * TILE;
+            if (overlapH && overlapV) {
+                // Eject player to just above the door (outside vault)
+                player.y = doorTop - player.h - 2;
+            }
+            DOOR.open = false;
+            alarmActive = false;
+            alarmTimer = 0;
+            showMessage('🔒 Porta fechada! Devolva a chave no local indicado.');
+            addTileFlash(DOOR.col, DOOR.row, '#27ae60');
+            addParticle(pcx, player.y - 10, '🔒 Fechada!', '#27ae60');
         }
         return;
     }
@@ -385,14 +423,6 @@ function handleInteract() {
     // CAIXA (checkout)
     const caixaTile = playerNearTileType(3);
     if (caixaTile) {
-        // Return key if player has it
-        if (hasKey) {
-            hasKey = false;
-            keyPickedUp = false;
-            showMessage('🔑 Chave devolvida ao caixa.');
-            addParticle(pcx, player.y - 10, '🔑 Devolvida', '#ffd700');
-            updateUI();
-        }
         if (hasBox && checkedOut) {
             showMessage('Leve a caixa para a DOCA!');
             addParticle(pcx, player.y - 10, '→ DOCA', '#7ec8e3');
@@ -442,8 +472,8 @@ function handleInteract() {
     if (docaTile) {
         if (hasBox && checkedOut) {
             if (hasKey) {
-                showMessage('🔑 Devolva a chave ao caixa antes de entregar!');
-                addParticle(pcx, player.y - 10, '🔑 → CAIXA', '#e74c3c');
+                showMessage('🔑 Devolva a chave ao local indicado antes de entregar!');
+                addParticle(pcx, player.y - 10, '🔑 → LOCAL', '#e74c3c');
                 return;
             }
             deliverBox();
@@ -728,15 +758,30 @@ function draw() {
         ctx.restore();
     });
 
-    // Draw key at key spot if not picked up
-    if (!keyPickedUp) {
-        const kx = KEY_SPOT.col * TILE + TILE/2;
-        const ky = KEY_SPOT.row * TILE + TILE/2;
-        ctx.font = '24px serif';
+    // Draw key spot (always visible, pulsing when player has key to return)
+    {
+        const kx = KEY_SPOT.col * TILE;
+        const ky = KEY_SPOT.row * TILE;
+        ctx.fillStyle = '#2a1a00';
+        ctx.fillRect(kx, ky, TILE, TILE);
+        const borderAlpha = hasKey ? (0.5 + 0.5 * Math.sin(elapsedTime * 0.007)) : 1;
+        ctx.save();
+        ctx.globalAlpha = borderAlpha;
+        ctx.strokeStyle = '#ffd700';
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(kx + 2, ky + 2, TILE - 4, TILE - 4);
+        ctx.restore();
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 8px Courier New';
         ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('🔑', kx, ky);
-        ctx.textBaseline = 'alphabetic';
+        ctx.fillText('CHAVE', kx + TILE / 2, ky + TILE - 5);
+        if (!keyPickedUp) {
+            ctx.font = '22px serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('🔑', kx + TILE / 2, ky + TILE / 2 - 4);
+            ctx.textBaseline = 'alphabetic';
+        }
     }
 
     // Vault label
@@ -800,6 +845,27 @@ function draw() {
 
     ctx.restore(); // end camera transform
 
+    // Alarm giroflex overlay
+    if (alarmActive) {
+        const pulse = 0.25 + 0.25 * Math.sin(alarmTimer * 0.014);
+        ctx.save();
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#ff0000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.restore();
+        const textAlpha = 0.7 + 0.3 * Math.sin(alarmTimer * 0.014);
+        ctx.save();
+        ctx.globalAlpha = textAlpha;
+        ctx.font = 'bold 28px Courier New';
+        ctx.textAlign = 'center';
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 5;
+        ctx.strokeText('⚠ ALARME! FECHE O COFRE! ⚠', canvas.width / 2, canvas.height / 2);
+        ctx.fillStyle = '#ff4444';
+        ctx.fillText('⚠ ALARME! FECHE O COFRE! ⚠', canvas.width / 2, canvas.height / 2);
+        ctx.restore();
+    }
+
     // Draw particles in screen space
     particles.forEach(p => {
         ctx.save();
@@ -844,10 +910,19 @@ function update(dt) {
     camera.x = Math.max(0, Math.min(camera.x, MAP_COLS * TILE - canvas.width));
     camera.y = Math.max(0, Math.min(camera.y, MAP_ROWS * TILE - canvas.height));
 
-    // Auto-close vault door when player leaves vault zone
+    // Alarm: door left open while player walks too far away
     if (DOOR.open) {
         const pr = Math.floor((player.y + player.h / 2) / TILE);
-        if (pr < DOOR.row - 1) DOOR.open = false;
+        if (pr < DOOR.row - 3) {
+            alarmActive = true;
+            alarmTimer += dt;
+        } else {
+            alarmActive = false;
+            alarmTimer = 0;
+        }
+    } else {
+        alarmActive = false;
+        alarmTimer = 0;
     }
 
     // Wave progression
@@ -935,6 +1010,8 @@ function startGame() {
     orders = [];
     particles = [];
     tileFlashes = [];
+    alarmActive = false;
+    alarmTimer = 0;
     orderIdCounter = 0;
     elapsedTime = 0;
     wave = 0;
